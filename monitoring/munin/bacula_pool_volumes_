@@ -5,7 +5,6 @@
 
 use strict;
 use warnings;
-use DBD::Pg;
 use File::Basename;
 
 # get the config data from the bacula dbcheck command
@@ -22,10 +21,11 @@ while (my $l = <FP>)
 close(FP);
 # set the db connect data, a) from enviroment (munin conf), local conf (bacula) or default
 my $DBUSER = $ENV{DBUSER} || $cfg{'db_user'} || 'bacula';
-my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'} || '5432';
+my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'};
 my $DBHOST = $ENV{DBHOST} || $cfg{'db_address'} || 'localhost';
 my $DBNAME = $ENV{DBNAME} || $cfg{'db_name'} || 'bacula';
 my $DBPASS = $ENV{DBPASS} || $cfg{'db_password'};
+my $DBTYPE = $ENV{DBTYPE} || $cfg{'db_type'};
 
 
 my $POOLNAME = File::Basename::basename($0);
@@ -37,18 +37,28 @@ my $query;
 my $cursor;
 my $data;
 # connect to DB
-my $dsn = "DBI:Pg:dbname=".$DBNAME.";host=".$DBHOST.";port=".$DBPORT;
+my $dsn = "DBI:";
+if ($DBTYPE =~ /mysql/i) {
+	require DBD::mysql;
+	$dsn .= "mysql";
+} else {
+	require DBD::Pg;
+	$dsn .= "Pg";
+}
+$dsn .= ":dbname=".$DBNAME;
+$dsn .= ";host=".$DBHOST if $DBHOST;
+$dsn .= ";port=".$DBPORT if $DBPORT;
 my $dbh = DBI->connect($dsn, $DBUSER, $DBPASS) || die ("Can't connect to db $DBNAME @ $DBHOST with user $DBUSER\n");
 
 # available bytes
-$query = "SELECT poolid FROM pool WHERE name = ?";
+$query = "SELECT poolid FROM Pool WHERE name = ?";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLNAME) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $POOLID = $data->{'poolid'} || 0;
 
 # max volumes in this pool, also used as TOTAL for normal output
-$query = "SELECT maxvols FROM pool WHERE poolid = ?";
+$query = "SELECT maxvols FROM Pool WHERE poolid = ?";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
@@ -105,43 +115,43 @@ if (defined($ARGV[0]) and ($ARGV[0] eq 'config'))
 # volstatus: Full, Archive, Append, Recycle, Read-Only, Disabled, Error, Busy
 
 # Full and retention time not reached
-$query = "SELECT count(*) AS full FROM media WHERE poolid = ? AND volstatus = 'Full' and (volretention || 'seconds')::INTERVAL + lastwritten > NOW()";
+$query = "SELECT count(*) AS full FROM Media WHERE poolid = ? AND volstatus = 'Full' and (volretention || 'seconds')::INTERVAL + lastwritten > NOW()";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $FULL = $data->{'full'} || 0;
 # Volmes which are appendable according to bacula
-$query = "SELECT count(*) AS append FROM media WHERE poolid = ? AND volstatus = 'Append'";
+$query = "SELECT count(*) AS append FROM Media WHERE poolid = ? AND volstatus = 'Append'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $APPEND = $data->{'append'} || 0;
 # Error Volumes from Bacula
-$query = "SELECT count(*) AS error FROM media WHERE poolid = ? AND volstatus = 'Error'";
+$query = "SELECT count(*) AS error FROM Media WHERE poolid = ? AND volstatus = 'Error'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $ERROR = $data->{'error'} || 0;
 # Used Volumes from Bacula
-$query = "SELECT count(*) AS used FROM media WHERE poolid = ? AND volstatus = 'Used'";
+$query = "SELECT count(*) AS used FROM Media WHERE poolid = ? AND volstatus = 'Used'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $USED = $data->{'used'} || 0;
 # Volumes wich are marked as recycleable or have reached their retention time
-$query = "SELECT count(*) AS recycle FROM media WHERE poolid = ? AND (volstatus = 'Recycle' OR (volretention || 'seconds')::INTERVAL + lastwritten < NOW()) AND volstatus != 'Append'";
+$query = "SELECT count(*) AS recycle FROM Media WHERE poolid = ? AND (volstatus = 'Recycle' OR (volretention || 'seconds')::INTERVAL + lastwritten < NOW()) AND volstatus != 'Append'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $RECYCLE = $data->{'recycle'} || 0;
 # Volumes which are not in state appendable or error
-$query = "SELECT count(*) AS other FROM media WHERE poolid = ? AND volstatus NOT IN ('Used', 'Full', 'Append', 'Error', 'Recycle')";
+$query = "SELECT count(*) AS other FROM Media WHERE poolid = ? AND volstatus NOT IN ('Used', 'Full', 'Append', 'Error', 'Recycle')";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $OTHER = $data->{'other'} || 0;
 # Unused and unlabeled
-$query = "SELECT CASE WHEN unused < 0 THEN 0 ELSE unused END AS unused FROM (SELECT (SELECT maxvols FROM pool WHERE poolid = ?) - COUNT(*) AS unused FROM media WHERE poolid = ?) AS sub";
+$query = "SELECT CASE WHEN unused < 0 THEN 0 ELSE unused END AS unused FROM (SELECT (SELECT maxvols FROM Pool WHERE poolid = ?) - COUNT(*) AS unused FROM media WHERE poolid = ?) AS sub";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($POOLID, $POOLID) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;

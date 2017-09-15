@@ -5,7 +5,6 @@
 
 use strict;
 use warnings;
-use DBD::Pg;
 
 # get the config data from the bacula dbcheck command
 my $dir_conf='/usr/sbin/dbcheck -B -c /etc/bacula/bacula-dir.conf';
@@ -21,10 +20,11 @@ while (my $l = <FP>)
 close(FP);
 # set the db connect data, a) from enviroment (munin conf), local conf (bacula) or default
 my $DBUSER = $ENV{DBUSER} || $cfg{'db_user'} || 'bacula';
-my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'} || '5432';
+my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'};
 my $DBHOST = $ENV{DBHOST} || $cfg{'db_address'} || 'localhost';
 my $DBNAME = $ENV{DBNAME} || $cfg{'db_name'} || 'bacula';
 my $DBPASS = $ENV{DBPASS} || $cfg{'db_password'};
+my $DBTYPE = $ENV{DBTYPE} || $cfg{'db_type'};
 
 if (defined($ARGV[0]) and ($ARGV[0] eq 'config'))
 {
@@ -63,29 +63,39 @@ my $query;
 my $cursor;
 my $data;
 # connect to DB
-my $dsn = "DBI:Pg:dbname=".$DBNAME.";host=".$DBHOST.";port=".$DBPORT;
+my $dsn = "DBI:";
+if ($DBTYPE =~ /mysql/i) {
+	require DBD::mysql;
+	$dsn .= "mysql";
+} else {
+	require DBD::Pg;
+	$dsn .= "Pg";
+}
+$dsn .= ":dbname=".$DBNAME;
+$dsn .= ";host=".$DBHOST if $DBHOST;
+$dsn .= ";port=".$DBPORT if $DBPORT;
 my $dbh = DBI->connect($dsn, $DBUSER, $DBPASS) || die ("Can't connect to db $DBNAME @ $DBHOST with user $DBUSER\n");
 
 # available bytes
-$query = 'SELECT (SUM(numvols) * SUM(maxvolbytes)) AS avail FROM pool p, job j WHERE p.poolid = j.poolid';
+$query = 'SELECT (SUM(numvols) * SUM(maxvolbytes)) AS avail FROM Pool p, Job j WHERE p.poolid = j.poolid';
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute() || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $AVAIL = $data->{'avail'};
 # bytes used by incremental backups
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS ibytes FROM job WHERE level='I' AND type='B'";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS ibytes FROM Job WHERE level='I' AND type='B'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute() || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $IBYTES = $data->{'ibytes'};
 # bytes used by differential backups
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS dbytes FROM job WHERE level='D' AND type='B'";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS dbytes FROM Job WHERE level='D' AND type='B'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute() || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $DBYTES = $data->{'dbytes'};
 # bytes used by differential backups
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS fbytes FROM job WHERE level='F' AND type='B'";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS fbytes FROM Job WHERE level='F' AND type='B'";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute() || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;

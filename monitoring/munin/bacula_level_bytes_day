@@ -5,7 +5,6 @@
 
 use strict;
 use warnings;
-use DBD::Pg;
 
 # get the config data from the bacula dbcheck command
 my $dir_conf='/usr/sbin/dbcheck -B -c /etc/bacula/bacula-dir.conf';
@@ -21,10 +20,11 @@ while (my $l = <FP>)
 close(FP);
 # set the db connect data, a) from enviroment (munin conf), local conf (bacula) or default
 my $DBUSER = $ENV{DBUSER} || $cfg{'db_user'} || 'bacula';
-my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'} || '5432';
+my $DBPORT = $ENV{DBPORT} || $cfg{'db_port'};
 my $DBHOST = $ENV{DBHOST} || $cfg{'db_address'} || 'localhost';
 my $DBNAME = $ENV{DBNAME} || $cfg{'db_name'} || 'bacula';
 my $DBPASS = $ENV{DBPASS} || $cfg{'db_password'};
+my $DBTYPE = $ENV{DBTYPE} || $cfg{'db_type'};
 # the backup job, will be excluded in the bytes count
 my $CATALOG = $ENV{CATALOG} || 'CatalogBackup';
 
@@ -57,26 +57,36 @@ my $query;
 my $cursor;
 my $data;
 # connect to DB
-my $dsn = "DBI:Pg:dbname=".$DBNAME.";host=".$DBHOST.";port=".$DBPORT;
+my $dsn = "DBI:";
+if ($DBTYPE =~ /mysql/i) {
+	require DBD::mysql;
+	$dsn .= "mysql";
+} else {
+	require DBD::Pg;
+	$dsn .= "Pg";
+}
+$dsn .= ":dbname=".$DBNAME;
+$dsn .= ";host=".$DBHOST if $DBHOST;
+$dsn .= ";port=".$DBPORT if $DBPORT;
 my $dbh = DBI->connect($dsn, $DBUSER, $DBPASS) || die ("Can't connect to db $DBNAME @ $DBHOST with user $DBUSER\n");
 
 ## Endtime is offsetted by one hour because all the backups start at about 2300
 
 # Different logic here: We want to know the amount of jobbytes of the jobs between the current $CATALOG and the last $CATALOG assuming that $CATALOG always gets scheduled as last job.
 # Incremental
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS ibytes FROM job WHERE level = 'I' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM job WHERE name = ?))";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS ibytes FROM Job WHERE level = 'I' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM Job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM Job WHERE name = ?))";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($CATALOG, $CATALOG) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $IBYTES = $data->{'ibytes'};
 # Differential
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS dbytes FROM job WHERE level = 'D' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM job WHERE name = ?))";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS dbytes FROM Job WHERE level = 'D' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM Job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM Job WHERE name = ?))";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($CATALOG, $CATALOG) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
 my $DBYTES = $data->{'dbytes'};
 # Full
-$query = "SELECT COALESCE(SUM(jobbytes), 0) AS fbytes FROM job WHERE level = 'F' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM job WHERE name = ?))";
+$query = "SELECT COALESCE(SUM(jobbytes), 0) AS fbytes FROM Job WHERE level = 'F' AND type = 'B' AND jobid > (SELECT MAX(jobid) FROM Job WHERE name = ? AND jobid != (SELECT MAX(jobid) FROM Job WHERE name = ?))";
 $cursor = $dbh->prepare(qq{$query}) || die ("Cannot prepare ".$DBI::errstr."\n");
 $cursor->execute($CATALOG, $CATALOG) || die ("Cannot execute ".$cursor->errstr."\n");
 $data = $cursor->fetchrow_hashref;
